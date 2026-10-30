@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dice Ring Race</title>
+<style>
+:root{--wood:#6b3a22;--wood2:#5c3019;--paper:#fdfdfb;--ink:#1c1c1c;--text:#2b1a10;--panel:#fff6ea;--line:#d9bfa0;--red:#e0262d;--yel:#f5c51b;--die:#2f9a4f}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--wood:#3a2013;--wood2:#2f190e;--paper:#ecebe6;--text:#f6e9d9;--panel:#2d1b10;--line:#5a3a24}}
+:root[data-theme="dark"]{--wood:#3a2013;--wood2:#2f190e;--paper:#ecebe6;--text:#f6e9d9;--panel:#2d1b10;--line:#5a3a24}
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*::before,*::after{box-sizing:inherit}
+body{margin:0;min-height:100vh;color:var(--text);font:16px/1.5 "Avenir Next","Trebuchet MS",system-ui,sans-serif;background:repeating-linear-gradient(90deg,var(--wood) 0 70px,var(--wood2) 70px 73px,var(--wood) 73px 150px)}
+main{max-width:600px;margin:0 auto;padding:18px 14px 32px}
+#status{margin:0 0 10px;font-weight:700;font-size:1.1rem;min-height:3em;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.6)}
+svg{display:block;width:100%;height:auto;filter:drop-shadow(0 8px 10px rgba(0,0,0,.4))}
+.tok{transition:transform .11s linear}
+.panel{margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+select,button{font:inherit;padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:var(--paper);color:#2b1a10;cursor:pointer}
+button.primary{background:var(--die);color:#fff;border-color:var(--die);font-weight:700}
+button:disabled{opacity:.45;cursor:default}
+button:focus-visible,select:focus-visible{outline:3px solid #2b1a10;outline-offset:2px}
+ul{margin:8px 0 0;padding-left:20px;max-width:64ch}
+</style>
+</head>
+<body>
+<main>
+<p id="status" aria-live="polite"></p>
+<svg id="board" viewBox="0 0 560 560" role="img" aria-label="Ring of 16 spaces with two tokens"></svg>
+<div class="panel">
+  <div class="row">
+    <button class="primary" id="roll">Roll the die</button>
+    <button id="new">New game</button>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <label>Opponent <select id="mode"><option value="ai">Computer plays yellow</option><option value="two">Two players</option></select></label>
+    <label>Move rule <select id="rule"><option value="match">Go to the next space with your number</option><option value="steps">Move as many spaces as the die shows</option></select></label>
+  </div>
+  <ul>
+    <li>Both tokens start at INICIO and travel clockwise. Red rolls first.</li>
+    <li>Each time your token gets back around to INICIO, you cross out one of your three marks in the middle.</li>
+    <li>The first player to cross out all three marks wins.</li>
+  </ul>
+</div>
+</main>
+<script>
+const NS='http://www.w3.org/2000/svg',CX=280,CY=280,RO=250,RI=170,N=16;
+const NUMS=[0,6,1,3,4,2,5,1,3,5,6,5,1,4,3,2]; // index 0 = INICIO
+const ang=i=>(180+22.5*i)*Math.PI/180;
+const pt=(r,a)=>[CX+r*Math.cos(a),CY+r*Math.sin(a)];
+const PL=[{n:'Red',c:'var(--red)'},{n:'Yellow',c:'var(--yel)'}];
+let pos,laps,turn,busy,over,timer;
+
+function build(){
+  let s='<rect x="20" y="20" width="520" height="520" rx="8" fill="var(--paper)"/>';
+  for(let i=0;i<N;i++){
+    const a=ang(i),h=Math.PI/16,[x1,y1]=pt(RO,a-h),[x2,y2]=pt(RO,a+h),[x3,y3]=pt(RI,a+h),[x4,y4]=pt(RI,a-h);
+    s+=`<path d="M${x1} ${y1}A${RO} ${RO} 0 0 1 ${x2} ${y2}L${x3} ${y3}A${RI} ${RI} 0 0 0 ${x4} ${y4}Z" fill="none" stroke="var(--ink)" stroke-width="2.5"/>`;
+    const [tx,ty]=pt(205,a);
+    if(i===0)s+=`<text x="${tx}" y="${ty-4}" text-anchor="middle" font-size="22" font-weight="800" fill="var(--ink)">↑</text><text x="${tx}" y="${ty+15}" text-anchor="middle" font-size="15" font-weight="800" fill="var(--ink)">INICIO</text>`;
+    else s+=`<text x="${tx}" y="${ty+12}" text-anchor="middle" font-size="36" font-weight="800" fill="none" stroke="var(--ink)" stroke-width="2">${NUMS[i]}</text>`;
+  }
+  s+='<g id="tally"></g><g id="die" transform="translate(245 245)"></g>';
+  s+=PL.map((p,k)=>`<g class="tok" id="tok${k}"><circle r="15" fill="${p.c}" stroke="#00000066" stroke-width="2"/><circle r="9" fill="none" stroke="#00000033" stroke-width="2"/></g>`).join('');
+  document.getElementById('board').innerHTML=s;
+}
+function tally(){
+  let s='';
+  // yellow marks on top, red marks at the bottom, as drawn in the video
+  [[1,215],[0,345]].forEach(([k,y])=>{
+    for(let j=0;j<3;j++){
+      const x=230+j*50;
+      s+=`<line x1="${x}" y1="${y}" x2="${x}" y2="${y+32}" stroke="${PL[k].c}" stroke-width="7" stroke-linecap="round"/>`;
+      if(j<laps[k])s+=`<line x1="${x-14}" y1="${y-6}" x2="${x+14}" y2="${y+38}" stroke="var(--ink)" stroke-width="4" stroke-linecap="round"/>`;
+    }
+  });
+  document.getElementById('tally').innerHTML=s;
+}
+const PIPS={1:[[2,2]],2:[[1,1],[3,3]],3:[[1,1],[2,2],[3,3]],4:[[1,1],[1,3],[3,1],[3,3]],5:[[1,1],[1,3],[2,2],[3,1],[3,3]],6:[[1,1],[1,3],[2,1],[2,3],[3,1],[3,3]]};
+function drawDie(v){
+  document.getElementById('die').innerHTML=`<rect width="70" height="70" rx="12" fill="var(--die)" stroke="#00000055" stroke-width="2"/>`+
+    (v?PIPS[v].map(([r,c])=>`<circle cx="${c*17.5}" cy="${r*17.5}" r="6" fill="#fff"/>`).join(''):'');
+}
+function place(){
+  PL.forEach((_,k)=>{
+    const same=pos[0]===pos[1],a=ang(pos[k])+(same?(k?1:-1)*0.14:0),[x,y]=pt(236,a);
+    document.getElementById('tok'+k).style.transform=`translate(${x}px,${y}px)`;
+  });
+}
+const say=t=>document.getElementById('status').textContent=t;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+function setup(){
+  clearTimeout(timer);pos=[0,0];laps=[0,0];turn=0;busy=false;over=false;
+  build();tally();drawDie(0);place();
+  say('Red’s turn. Roll the die.');refresh();
+}
+function refresh(){
+  const humanTurn=!over&&!busy&&!(document.getElementById('mode').value==='ai'&&turn===1);
+  document.getElementById('roll').disabled=!humanTurn;
+}
+async function roll(){
+  if(busy||over)return;
+  busy=true;refresh();
+  for(let t=0;t<9;t++){drawDie(1+Math.floor(Math.random()*6));await sleep(70);}
+  const v=1+Math.floor(Math.random()*6);drawDie(v);await sleep(300);
+  let d=v;
+  if(document.getElementById('rule').value==='match'){d=1;while(NUMS[(pos[turn]+d)%N]!==v)d++;}
+  for(let s=0;s<d;s++){
+    pos[turn]=(pos[turn]+1)%N;place();
+    if(pos[turn]===0){laps[turn]++;tally();if(laps[turn]===3){over=true;break;}}
+    await sleep(120);
+  }
+  const who=PL[turn].n;
+  if(over){say(who+' rolled '+v+' and wins. All three marks crossed out!');busy=false;refresh();return;}
+  turn=1-turn;busy=false;
+  say(who+' rolled '+v+' and moved '+d+(d===1?' space':' spaces')+'. '+PL[turn].n+'’s turn.');
+  refresh();
+  if(document.getElementById('mode').value==='ai'&&turn===1)timer=setTimeout(roll,800);
+}
+document.getElementById('roll').onclick=roll;
+document.getElementById('new').onclick=setup;
+document.getElementById('mode').onchange=setup;
+document.getElementById('rule').onchange=setup;
+setup();
+</script>
+</body>
+</html>
